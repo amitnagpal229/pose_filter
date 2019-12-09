@@ -93,6 +93,8 @@ def analyze_pose(pose):
 def is_player(pose, x_court_limits, y_court_limits):
     top_joint_y, arm_is_up, is_sitting = analyze_pose(pose)
 
+    #if isAudience(pose):
+    #    return False
     if is_sitting:
         return False
     elif top_joint_y > im_height / 2:  # if pose in lower half of the screen, look for missing legs
@@ -112,8 +114,13 @@ def get_frame_joint_matrix(poses, basket):
     player_joint_matrix = np.zeros((im_height, im_width))
     audience_joint_matrix = np.zeros((im_height, im_width))
 
+    # Get a list of sitting persons
+    #sitting_person_indices,_ = getSittingPersons(poses['people'])
+
     # Add all player joints and blacklist audience joints
-    for person in poses['people']:
+    for i, person in enumerate(poses['people']):
+        #if i in sitting_person_indices:
+        #    add_person_joints(person, audience_joint_matrix)
         if is_player(person, x_limits, y_limits):
             add_person_joints(person, player_joint_matrix)
         else:
@@ -140,11 +147,11 @@ def get_basket(frame_id):
 
 
 def get_video_joint_matrices():
-    joint_matrices = {}
-    for frame_id in all_poses:
+    joint_matrices = np.zeros((len(frame_map), im_height, im_width))
+    for i, frame_id in enumerate(frame_map):
         basket = get_basket(frame_id)
         joint_matrix = get_frame_joint_matrix(all_poses[frame_id], basket)
-        joint_matrices[frame_id] = joint_matrix
+        joint_matrices[i] = joint_matrix
     return joint_matrices
 
 
@@ -174,15 +181,13 @@ def apply_filter(joint_matrices, filter):
     num_columns = int((im_width - size_x)/grid_resolution + 1)
     filter_matrices = np.zeros((len(all_baskets), num_rows, num_columns))
 
-    frame_ids = sorted(all_baskets.keys())
-    for i, frame_id in enumerate(frame_ids):
-        joint_matrix = joint_matrices[frame_id]
+    for i, frame_id in enumerate(frame_map):
         for row in range(num_rows):
             for column in range(num_columns):
                 image_row = row * grid_resolution
                 image_column = column * grid_resolution
                 filter_matrices[i][row][column] = \
-                    filter(joint_matrix[image_row: image_row+size_y, image_column: image_column+size_x])
+                    filter(joint_matrices[i][image_row: image_row+size_y, image_column: image_column+size_x])
 
     return filter_matrices
 
@@ -200,45 +205,44 @@ def shift_matrix(matrix, x, y, left):
 
 
 # Shifts filter values in reference to the basket
-def shift_filter(mean_matrices):
-    frame_ids = sorted(all_baskets.keys())
-    for i, frame_id in enumerate(frame_ids):
+def shift_matrices(matrices):
+    for i, frame_id in enumerate(frame_map):
         x_limits, y_limits = get_court_xy_limits(get_basket(frame_id))
         x = x_limits[0] if left_basket else x_limits[1]
         y = y_limits[0]
-        mean_matrices[i] = shift_matrix(mean_matrices[i], x, y, left_basket)
+        matrices[i] = shift_matrix(matrices[i], x, y, left_basket)
 
 
 def process():
     jump_filters = {}  # frame -> jump_filter
-    frame_count = len(all_poses)
-    pose_frame_ids = sorted(all_poses.keys())
     previous_video_frame_id = -1  # Previous video frame processed
-    out_frame_id = -1
     frame_id_offset = min(all_poses.keys())
     joint_matrices = get_video_joint_matrices()
-    #shift_filter(joint_matrices)
-    #mean_matrices = apply_filter(joint_matrices, mean_filter)
+    shift_matrices(joint_matrices)
+    mean_matrices = apply_filter(joint_matrices, mean_filter)
 
     #for frame_id in pose_frame_ids[lookback-1:]:
-    for frame_id in pose_frame_ids:
-        video_frame_id = int((frame_id - frame_id_offset) / frame_ratio)
+    for i, frame_id in enumerate(frame_map):
+        video_frame_id = frame_id - frame_id_offset
         ret_val, orig_image = get_orig_image(previous_video_frame_id, video_frame_id)
         previous_video_frame_id = video_frame_id
-        out_frame_id += 1
-
-        joints = joint_matrices[frame_id]
-        for index in np.argwhere(joints > 0):
-            cv2.circle(orig_image, (index[1], index[0]), 4, [0, 255, 0], thickness=-1)
 
         x_limits, y_limits = get_court_xy_limits(get_basket(frame_id))
         x = x_limits[0] if left_basket else x_limits[1]
         y = y_limits[0]
-        cv2.line(orig_image, (0, y), (x, y), [255, 0, 0])
-        cv2.line(orig_image, (x, im_height), (x, y), [255, 0, 0])
-        draw_frame_num(orig_image, out_frame_id, frame_id)
         M = np.float32([[1, 0, im_width-x], [0, 1, -y]])
         cv2.warpAffine(orig_image, M, (im_width, im_height), orig_image)
+        for index in np.argwhere(joint_matrices[i] > 0):
+            cv2.circle(orig_image, (index[1], index[0]), 4, [0, 255, 0], thickness=-1)
+        draw_frame_num(orig_image, i, frame_id)
+
+        mean_rise = mean_matrices[max(0, i-5)] - mean_matrices[i]
+        significant_rise = np.argwhere(mean_rise > 400)
+        for point in significant_rise:
+            row = point[0] * grid_resolution
+            column = point[1] * grid_resolution
+            cv2.rectangle(orig_image, (column, row), (column+filter_grid_size[0], row+filter_grid_size[1]), [185,185,185], 2)
+
         cam_out.write(orig_image)
 
     return jump_filters
@@ -247,6 +251,65 @@ def process():
 def print_time(label, start, end):
     print("{}: {:.2} secs".format(label, end-start))
 
+
+def isAudienceBelow(jp):
+    missingParts=0
+    lowerCorner=False
+    if not 'rlowerleg' in jp:
+        missingParts=missingParts+1
+    if not 'llowerleg' in jp:
+        missingParts=missingParts+1
+    if not 'llowerarm' in jp:
+        missingParts=missingParts+1
+    if not 'rlowerarm' in jp:
+        missingParts=missingParts+1
+    if ('lupperarm' in jp and jp['lupperarm']['from'][1]/1080 >= 0.85) or ('rupperarm' in jp and jp['rupperarm']['from'][1]/1080 >= 0.85):
+        lowerCorner=True
+    if missingParts>=2 and lowerCorner:
+        return True
+    else:
+        return False
+
+def isAudienceUp(jp):
+    missingParts=0
+    lowerCorner=False
+    if not 'rlowerleg' in jp:
+        missingParts=missingParts+1
+    if not 'llowerleg' in jp:
+        missingParts=missingParts+1
+    if not 'llowerarm' in jp:
+        missingParts=missingParts+1
+    if not 'rlowerarm' in jp:
+        missingParts=missingParts+1
+    if ('lupperarm' in jp and jp['lupperarm']['from'][1]/1080 < 0.2) or ('rupperarm' in jp and jp['rupperarm']['from'][1]/1080 < 0.2):
+        lowerCorner=True
+    if missingParts>=2 and lowerCorner:
+        return True
+    else:
+        return False
+
+
+def isAudience(jp):
+    return isAudienceBelow(jp) or isAudienceUp(jp)
+
+
+### find sitting
+def getSittingPersons(jps):
+    personHeights={}
+    sittingPersonIndices=[]
+    i=0
+    for jp in jps:
+        if not isAudience(jp) and ('llowerleg' in jp and 'lhipneck' in jp):
+            size=jp['llowerleg']['to'][1]-jp['lhipneck']['from'][1]
+            personHeights[i]=size
+        else:
+            sittingPersonIndices.append(i)
+        i=i+1
+    maxHeight=max([personHeights[j] for j in personHeights])
+    for j in personHeights:
+        if personHeights[j]/maxHeight<=0.6:
+            sittingPersonIndices.append(j)
+    return sittingPersonIndices,maxHeight
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -276,6 +339,7 @@ if __name__ == '__main__':
     # Pickle files for pose and tracking
     all_baskets = pickle.load(open(args.basket_bbox, "rb"), fix_imports=True)
     left_basket = smooth_baskets(all_baskets)
+    frame_map = sorted(all_baskets.keys())
     all_poses = pickle.load(open(args.pose_features, "rb"))
 
     # joint_matrix = np.zeros((5, 5))
