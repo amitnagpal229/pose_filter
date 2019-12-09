@@ -50,9 +50,9 @@ def smooth_baskets(baskets):
     for frame in frame_ids[1:]:
         if baskets[frame][0][0] < im_width / 2:
             left_count += 1
-        step = int((frame - previous_frame_id) / frame_ratio)
+        step = int((frame - previous_frame_id) / basket_frame_ratio)
         for i in range(step-1):
-            missing_frames[previous_frame_id+frame_ratio*(i+1)] = \
+            missing_frames[previous_frame_id + basket_frame_ratio * (i + 1)] = \
                 fit_missing_point(baskets[frame][0], baskets[previous_frame_id][0], step-1, i+1), \
                 fit_missing_point(baskets[frame][1], baskets[previous_frame_id][1], step-1, i+1)
         previous_frame_id = frame
@@ -223,7 +223,7 @@ def process():
 
     #for frame_id in pose_frame_ids[lookback-1:]:
     for i, frame_id in enumerate(frame_map):
-        video_frame_id = frame_id - frame_id_offset
+        video_frame_id = int((frame_id - frame_id_offset)/1)
         ret_val, orig_image = get_orig_image(previous_video_frame_id, video_frame_id)
         previous_video_frame_id = video_frame_id
 
@@ -317,7 +317,8 @@ if __name__ == '__main__':
     parser.add_argument('--video', type=str, required=True, help='video clip')
     parser.add_argument('--out_fps', type=int, required=True, help='fps of output video')
     #parser.add_argument('--frame_id_offset', type=int, required=True, help='frame_id of first frame in video')
-    parser.add_argument('--frame_ratio', type=int, default=3, help='frame ratio between video file & bbox pkl file')
+    parser.add_argument('--basket_frame_ratio', type=int, default=3, help='frame ratio between video file & bbox pkl file')
+    parser.add_argument('--track_frame_ratio', type=int, default=3, help='frame ratio between video file & track pkl file')
     parser.add_argument('--pose_features', type=str, required=True, help='pose features pkl file')
     parser.add_argument('--frame_lookback', type=int, default=5, help='# frames to consider when calculating travel')
     parser.add_argument('--basket_hspace', type=int, default=140, help='poses considered upto this space beyond basket')
@@ -329,7 +330,8 @@ if __name__ == '__main__':
     video_out_filename = args.video.rsplit(".", 1)[0].rsplit("_", 1)[0] + "_filter.mp4"
     filters_out_filename = args.video.rsplit(".", 1)[0].rsplit("_", 1)[0] + "_filter.pkl"
     lookback = args.frame_lookback
-    frame_ratio = args.frame_ratio
+    basket_frame_ratio = args.basket_frame_ratio
+    track_frame_ratio = args.track_frame_ratio
     filter_grid_size = tuple(args.filter_grid_size)
     grid_resolution = args.grid_resolution
 
